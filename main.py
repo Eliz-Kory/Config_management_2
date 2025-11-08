@@ -1,5 +1,4 @@
 import sys
-import os
 import argparse
 from pathlib import Path
 
@@ -8,77 +7,63 @@ try:
 except ImportError:
     import tomli as tomllib
 
+from nuget_fetcher import NuGetFetcher
 
-def load_config(config_path: str):
+
+def load_and_validate_config(path: Path):
     try:
-        with open(config_path, "rb") as f:
-            return tomllib.load(f)
+        with open(path, "rb") as f:
+            cfg = tomllib.load(f)
     except FileNotFoundError:
-        raise ValueError(f"Конфигурационный файл не найден: {config_path}")
-    except tomllib.TOMLDecodeError as e:
-        raise ValueError(f"Ошибка разбора TOML: {e}")
+        raise ValueError(f"Файл конфигурации не найден: {path}")
 
+    required = ["package_name", "repository_url", "repo_mode"]
+    for key in required:
+        if key not in cfg:
+            raise ValueError(f"Отсутствует обязательный параметр: {key}")
+   
+    if not isinstance(cfg["package_name"], str) or not cfg["package_name"].strip():
+        raise ValueError("package_name должен быть непустой строкой")
+    if cfg["repo_mode"] not in ("online", "offline"):
+        raise ValueError("repo_mode должен быть 'online' или 'offline'")
 
-def validate_config(cfg):
-    errors = []
-
-    if not isinstance(cfg.get("package_name"), str) or not cfg["package_name"].strip():
-        errors.append("❌ 'package_name' должен быть непустой строкой")
-
-    url = cfg.get("repository_url")
-    if not isinstance(url, str) or not url.strip():
-        errors.append("❌ 'repository_url' должен быть непустой строкой")
-
-    mode = cfg.get("repo_mode")
-    if mode not in ("online", "offline"):
-        errors.append("❌ 'repo_mode' должен быть 'online' или 'offline'")
-
-    out_img = cfg.get("output_image")
-    if not isinstance(out_img, str) or not out_img.strip():
-        errors.append("❌ 'output_image' должен быть непустой строкой")
-    elif not any(out_img.endswith(ext) for ext in (".png", ".svg", ".pdf", ".jpg")):
-        print("⚠️  'output_image' не имеет типичного графического расширения — продолжаем, но проверьте.")
-
-    if not isinstance(cfg.get("ascii_tree"), bool):
-        errors.append("❌ 'ascii_tree' должен быть логическим значением (true/false)")
-
-    filt = cfg.get("filter_substring")
-    if filt is not None and not isinstance(filt, str):
-        errors.append("❌ 'filter_substring' должен быть строкой или отсутствовать")
-
-    if errors:
-        raise ValueError("Ошибки в конфигурации:\n" + "\n".join(errors))
-
-
-def print_config(cfg):
-    print("✅ Параметры конфигурации:")
-    for key, value in cfg.items():
-        print(f"  {key} = {repr(value)}")
+    return cfg
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Визуализатор графа зависимостей пакетов")
-    parser.add_argument(
-        "--config",
-        "-c",
-        default="config.toml",
-        help="Путь к конфигурационному файлу (по умолчанию: config.toml)",
-    )
+    parser = argparse.ArgumentParser()
+    parser.add_argument("-c", "--config", default="config.toml")
     args = parser.parse_args()
 
     config_path = Path(args.config)
-    if not config_path.is_file():
-        print(f"Ошибка: файл {config_path} не существует.", file=sys.stderr)
+    config = load_and_validate_config(config_path)
+
+    package = config["package_name"]
+    repo_url = config["repository_url"]
+    mode = config["repo_mode"]
+
+    if mode != "online":
+        print("Этап 2 поддерживает пока только режим 'online'", file=sys.stderr)
         sys.exit(1)
 
+    print(f"Сбор прямых зависимостей для пакета: {package}")
+    print(f"Репозиторий: {repo_url}")
+
     try:
-        config = load_config(config_path)
-        validate_config(config)
-        print_config(config)
-        print("\n🎉 Этап 1: конфигурация загружена и проверена успешно.")
-    except ValueError as e:
-        print(f"❌ Ошибка конфигурации:\n{e}", file=sys.stderr)
+        fetcher = NuGetFetcher(repo_url)
+        deps = fetcher.get_direct_dependencies(package)
+
+        if not deps:
+            print("Прямых зависимостей не найдено.")
+        else:
+            print(f"\n✅ Прямые зависимости ({len(deps)}):")
+            for i, (dep_id, version) in enumerate(deps, 1):
+                print(f"{i:2}. {dep_id} = {version}")
+
+    except Exception as e:
+        print(f"❌ Ошибка: {e}", file=sys.stderr)
         sys.exit(2)
+
 
 
 if __name__ == "__main__":
