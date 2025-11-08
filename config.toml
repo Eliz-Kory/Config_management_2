@@ -1,0 +1,13 @@
+# config.toml
+
+package_name = "Newtonsoft.Json"
+
+repository_url = "https://api.nuget.org/v3/index.json"
+
+repo_mode = "online"
+
+output_image = "graph.png"
+
+ascii_tree = true
+
+filter_substring = "Json"
