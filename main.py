@@ -1,32 +1,30 @@
+# main.py (этап 3)
 import sys
 import argparse
 from pathlib import Path
 
 try:
-    import tomllib  
+    import tomllib
 except ImportError:
     import tomli as tomllib
 
 from nuget_fetcher import NuGetFetcher
+from offline_provider import OfflineTestProvider
+from dependency_graph.py import DependencyGraphBuilder
 
 
-def load_and_validate_config(path: Path):
-    try:
-        with open(path, "rb") as f:
-            cfg = tomllib.load(f)
-    except FileNotFoundError:
-        raise ValueError(f"Файл конфигурации не найден: {path}")
+def load_config(path: Path):
+    with open(path, "rb") as f:
+        return tomllib.load(f)
 
+
+def validate_config(cfg):
     required = ["package_name", "repository_url", "repo_mode"]
     for key in required:
         if key not in cfg:
-            raise ValueError(f"Отсутствует обязательный параметр: {key}")
-   
-    if not isinstance(cfg["package_name"], str) or not cfg["package_name"].strip():
-        raise ValueError("package_name должен быть непустой строкой")
+            raise ValueError(f"Отсутствует '{key}' в конфигурации")
     if cfg["repo_mode"] not in ("online", "offline"):
         raise ValueError("repo_mode должен быть 'online' или 'offline'")
-
     return cfg
 
 
@@ -35,35 +33,52 @@ def main():
     parser.add_argument("-c", "--config", default="config.toml")
     args = parser.parse_args()
 
-    config_path = Path(args.config)
-    config = load_and_validate_config(config_path)
+    cfg = validate_config(load_config(Path(args.config)))
 
-    package = config["package_name"]
-    repo_url = config["repository_url"]
-    mode = config["repo_mode"]
+    package = cfg["package_name"]
+    repo_mode = cfg["repo_mode"]
+    repo_url = cfg["repository_url"]
+    filter_substring = cfg.get("filter_substring")
 
-    if mode != "online":
-        print("Этап 2 поддерживает пока только режим 'online'", file=sys.stderr)
-        sys.exit(1)
+    print(f"Целевой пакет: {package}")
+    print(f"Режим: {repo_mode}")
+    if filter_substring:
+        print(f"Фильтр: '{filter_substring}'")
 
-    print(f"Сбор прямых зависимостей для пакета: {package}")
-    print(f"Репозиторий: {repo_url}")
-
-    try:
+    # Выбор провайдера
+    if repo_mode == "online":
+        print("Используется онлайн-репозиторий NuGet")
         fetcher = NuGetFetcher(repo_url)
-        deps = fetcher.get_direct_dependencies(package)
+    elif repo_mode == "offline":
+        print(f"Используется тестовый репозиторий: {repo_url}")
+        fetcher = OfflineTestProvider(repo_url)
+    else:
+        raise RuntimeError("Недопустимый режим")
 
-        if not deps:
-            print("Прямых зависимостей не найдено.")
+    # Построение графа
+    builder = DependencyGraphBuilder(fetcher, filter_substring)
+    graph = builder.build(package)
+
+    # Вывод графа
+    print("\n✅ Построен граф зависимостей:")
+    for pkg, deps in graph.items():
+        if deps:
+            print(f"  {pkg} → {', '.join(deps)}")
         else:
-            print(f"\n✅ Прямые зависимости ({len(deps)}):")
-            for i, (dep_id, version) in enumerate(deps, 1):
-                print(f"{i:2}. {dep_id} = {version}")
+            print(f"  {pkg} → (лист)")
 
-    except Exception as e:
-        print(f"❌ Ошибка: {e}", file=sys.stderr)
-        sys.exit(2)
+    # Циклы
+    cycles = builder.get_cycles()
+    if cycles:
+        print(f"\n⚠️  Обнаружены циклические зависимости ({len(cycles)}):")
+        for i, cycle in enumerate(cycles, 1):
+            print(f"  {i}. {' → '.join(cycle)}")
+    else:
+        print("\n✅ Циклических зависимостей не обнаружено.")
 
+    total_nodes = len(graph)
+    total_edges = sum(len(deps) for deps in graph.values())
+    print(f"\nСтатистика: {total_nodes} узлов, {total_edges} рёбер")
 
 
 if __name__ == "__main__":
